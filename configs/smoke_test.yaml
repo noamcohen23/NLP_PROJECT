@@ -1,0 +1,73 @@
+# ============================================================
+# Smoke test config — runs end-to-end on CPU with gpt2.
+# Purpose: verify all scripts execute without errors before
+# launching the real run on the GPU cluster.
+# ============================================================
+
+# --- Models (tiny, no HF auth needed) ---
+policy_model: "gpt2"
+rm_base_model: "gpt2"
+
+# --- Dataset ---
+dataset_name: "PKU-Alignment/PKU-SafeRLHF"
+rm_train_subset: 30
+rm_eval_subset: 10
+ppo_train_subset: 30
+ppo_eval_subset: 8
+
+# --- Sequence lengths (short for fast CPU run) ---
+max_length: 128
+max_prompt_length: 64
+
+# --- LoRA ---
+lora_r: 4
+lora_alpha: 8
+lora_dropout: 0.0
+lora_target_modules:
+  - c_attn   # gpt2 uses c_attn instead of q/v_proj
+
+# --- Reward Model ---
+rm_output_dir: "outputs/smoke_rm"
+rm_num_epochs: 1
+rm_batch_size: 4
+rm_grad_accumulation: 1
+rm_lr: 1.0e-5
+rm_warmup_ratio: 0.0
+rm_save_steps: 50
+rm_eval_steps: 50
+rm_logging_steps: 10
+
+# --- PPO ---
+ppo_output_dir: "outputs/smoke_ppo"
+ppo_lr: 1.0e-5
+ppo_per_device_batch_size: 4
+ppo_num_mini_batches: 1
+ppo_local_rollout_forward_batch_size: 4
+ppo_gradient_accumulation_steps: 1
+ppo_epochs: 1
+ppo_total_episodes: 20        # ~5 gradient update steps
+ppo_kl_coeff: 0.1
+ppo_cliprange: 0.2
+ppo_cliprange_value: 0.2
+ppo_vf_coef: 0.1
+ppo_max_grad_norm: 1.0
+ppo_warmup_ratio: 0.0
+ppo_save_steps: 100
+ppo_logging_steps: 1
+
+# --- Generation ---
+max_new_tokens: 20
+temperature: 0.7
+
+# --- Evaluation ---
+eval_output_dir: "outputs/smoke_eval"
+eval_batch_size: 4
+eval_max_new_tokens: 20
+eval_subset: 10
+harm_classifier_path: null
+
+# --- Logging ---
+bf16: false        # CPU doesn't support bf16
+use_wandb: false
+wandb_project: "nlp-rlhf"
+run_name: "smoke_test"
