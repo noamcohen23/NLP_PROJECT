@@ -18,6 +18,14 @@ import torch
 import yaml
 from peft import LoraConfig, TaskType
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+
+def _get_device_setup():
+    if torch.cuda.is_available():
+        return "cuda", "auto", torch.bfloat16
+    if torch.backends.mps.is_available():
+        return "mps", {"": "mps"}, torch.bfloat16
+    return "cpu", {"": "cpu"}, torch.float32
 from trl import RewardConfig, RewardTrainer
 
 from data_utils import load_pku_dataset, make_rm_dataset
@@ -38,6 +46,7 @@ def build_lora_config(cfg: dict, task_type: TaskType) -> LoraConfig:
 
 def train_rm(cfg: dict) -> None:
     os.makedirs(cfg["rm_output_dir"], exist_ok=True)
+    _, device_map, dtype = _get_device_setup()
 
     # -----------------------------------------------------------------------
     # Tokenizer
@@ -55,8 +64,8 @@ def train_rm(cfg: dict) -> None:
     model = AutoModelForSequenceClassification.from_pretrained(
         cfg["rm_base_model"],
         num_labels=1,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
+        torch_dtype=dtype,
+        device_map=device_map,
     )
     model.config.pad_token_id = tokenizer.pad_token_id
 
@@ -90,7 +99,7 @@ def train_rm(cfg: dict) -> None:
         save_steps=cfg.get("rm_save_steps", 500),
         save_total_limit=3,
         logging_steps=cfg.get("rm_logging_steps", 50),
-        bf16=True,
+        bf16=cfg.get("bf16", torch.cuda.is_available()),
         dataloader_num_workers=4,
         report_to="wandb" if cfg.get("use_wandb") else "none",
         run_name=cfg.get("run_name", "baseline_b") + "_rm",

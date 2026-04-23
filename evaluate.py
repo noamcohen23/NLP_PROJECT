@@ -296,11 +296,18 @@ def main() -> None:
 
     model_path = args.model_path or cfg["ppo_output_dir"]
     os.makedirs(cfg["eval_output_dir"], exist_ok=True)
-    has_cuda = torch.cuda.is_available()
-    device = torch.device("cuda" if has_cuda else "cpu")
-    # device_map: use "auto" on GPU (multi-GPU support), explicit device on CPU/MPS
-    device_map = "auto" if has_cuda else {"": device}
-    dtype = torch.bfloat16 if has_cuda else torch.float32
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        device_map = "auto"
+        dtype = torch.bfloat16
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+        device_map = {"": "mps"}
+        dtype = torch.bfloat16
+    else:
+        device = torch.device("cpu")
+        device_map = {"": "cpu"}
+        dtype = torch.float32
 
     # -----------------------------------------------------------------------
     # Load policy model — handles both full models and PEFT adapter checkpoints

@@ -23,15 +23,24 @@ import os
 
 import torch
 import yaml
-from peft import LoraConfig, TaskType
+from peft import LoraConfig, TaskType, get_peft_model
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from trl import PPOConfig, PPOTrainer
+
+
+def _get_device_setup():
+    if torch.cuda.is_available():
+        return "cuda", "auto", torch.bfloat16
+    if torch.backends.mps.is_available():
+        return "mps", {"": "mps"}, torch.bfloat16
+    return "cpu", {"": "cpu"}, torch.float32
 
 from data_utils import load_pku_dataset, make_ppo_dataset
 
 
 def train_ppo(cfg: dict) -> None:
     os.makedirs(cfg["ppo_output_dir"], exist_ok=True)
+    _, device_map, dtype = _get_device_setup()
 
     # -----------------------------------------------------------------------
     # Tokenizer (shared by policy and reference models)
@@ -47,7 +56,8 @@ def train_ppo(cfg: dict) -> None:
     print("Loading policy model …")
     policy_model = AutoModelForCausalLM.from_pretrained(
         cfg["policy_model"],
-        torch_dtype=torch.bfloat16,
+        torch_dtype=dtype,
+        device_map=device_map,
     )
 
     # -----------------------------------------------------------------------
@@ -56,7 +66,8 @@ def train_ppo(cfg: dict) -> None:
     print("Loading reference model …")
     ref_model = AutoModelForCausalLM.from_pretrained(
         cfg["policy_model"],
-        torch_dtype=torch.bfloat16,
+        torch_dtype=dtype,
+        device_map=device_map,
     )
     for p in ref_model.parameters():
         p.requires_grad_(False)
@@ -70,7 +81,8 @@ def train_ppo(cfg: dict) -> None:
     value_model = AutoModelForSequenceClassification.from_pretrained(
         cfg["policy_model"],
         num_labels=1,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=dtype,
+        device_map=device_map,
     )
     # value_model is trained jointly with the policy — keep grads on
 
@@ -85,7 +97,8 @@ def train_ppo(cfg: dict) -> None:
     reward_model = AutoModelForSequenceClassification.from_pretrained(
         cfg["rm_output_dir"],
         num_labels=1,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=dtype,
+        device_map=device_map,
     )
     for p in reward_model.parameters():
         p.requires_grad_(False)
@@ -116,7 +129,8 @@ def train_ppo(cfg: dict) -> None:
     print(f"PPO eval dataset size: {len(ppo_eval_dataset):,}")
 
     # -----------------------------------------------------------------------
-    # LoRA config (applied to the policy by PPOTrainer when peft_config is set)
+    # LoRA — applied directly to the policy; TRL 0.12+ no longer accepts
+    # peft_config in PPOTrainer, so we wrap the model ourselves.
     # -----------------------------------------------------------------------
     lora_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
@@ -126,6 +140,8 @@ def train_ppo(cfg: dict) -> None:
         target_modules=cfg["lora_target_modules"],
         bias="none",
     )
+    policy_model = get_peft_model(policy_model, lora_config)
+    policy_model.print_trainable_parameters()
 
     # -----------------------------------------------------------------------
     # PPO config  (TRL 0.24 — TrainingArguments-based)
@@ -159,7 +175,7 @@ def train_ppo(cfg: dict) -> None:
         logging_steps=cfg.get("ppo_logging_steps", 10),
         save_steps=cfg.get("ppo_save_steps", 500),
         save_total_limit=3,
-        bf16=cfg.get("bf16", True),
+        bf16=cfg.get("bf16", torch.cuda.is_available()),
         report_to="wandb" if cfg.get("use_wandb") else "none",
         run_name=cfg.get("run_name", "baseline_b") + "_ppo",
         # Misc
@@ -172,15 +188,14 @@ def train_ppo(cfg: dict) -> None:
     # Trainer
     # -----------------------------------------------------------------------
     trainer = PPOTrainer(
-        args=ppo_config,
+        config=ppo_config,
         processing_class=tokenizer,
-        model=policy_model,
-        ref_model=ref_model,
+        policy=policy_model,
+        ref_policy=ref_model,
         reward_model=reward_model,
         train_dataset=ppo_dataset,
         eval_dataset=ppo_eval_dataset,
         value_model=value_model,
-        peft_config=lora_config,
     )
 
     # -----------------------------------------------------------------------
